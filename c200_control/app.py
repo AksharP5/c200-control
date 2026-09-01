@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import argparse
+from fractions import Fraction
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 from typing import Any
 
 import gi
 
 gi.require_version("Adw", "1")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gst", "1.0")
 gi.require_version("Gtk", "4.0")
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gst, Gtk  # noqa: E402
 
 from .camera import (
     Camera,
@@ -26,6 +28,7 @@ from .camera import (
 
 APP_ID = "com.akshar.C200Control"
 CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "c200-control" / "settings.json"
+Gst.init(None)
 
 CONTROL_GROUPS = (
     (
@@ -103,8 +106,11 @@ class C200Window(Adw.ApplicationWindow):
         self.stream_modes: list[StreamMode] = []
         self.pending_values: dict[str, int] = {}
         self.pending_source: int | None = None
-        self.preview_process: subprocess.Popen[bytes] | None = None
-        self.preview_poll_source: int | None = None
+        self.preview_pipeline: Gst.Element | None = None
+        self.preview_bus: Gst.Bus | None = None
+        self.preview_generation = 0
+        self.pending_frame: tuple[int, bytes, int, int] | None = None
+        self.frame_update_scheduled = False
         self.initializing = False
 
         self.toast_overlay = Adw.ToastOverlay()
@@ -125,10 +131,10 @@ class C200Window(Adw.ApplicationWindow):
         self.content.set_margin_start(24)
         self.content.set_margin_end(24)
 
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroller.set_child(self.content)
-        toolbar_view.set_content(scroller)
+        self.scroller = Gtk.ScrolledWindow()
+        self.scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.scroller.set_child(self.content)
+        toolbar_view.set_content(self.scroller)
         self.toast_overlay.set_child(toolbar_view)
         self.set_content(self.toast_overlay)
         self.connect("close-request", self.on_close_request)
@@ -258,12 +264,42 @@ class C200Window(Adw.ApplicationWindow):
         reset_button.connect("clicked", self.restore_defaults)
         self.content.append(reset_button)
         self.refresh_dependencies()
+        GLib.idle_add(self.start_preview)
 
     def build_preview_section(self) -> Gtk.Widget:
         section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        heading_row = Gtk.Box(spacing=12)
         heading = Gtk.Label(label="Live preview", xalign=0)
         heading.add_css_class("title-4")
-        section.append(heading)
+        heading.set_hexpand(True)
+        heading_row.append(heading)
+
+        self.preview_status = Gtk.Label(label="Starting")
+        self.preview_status.add_css_class("dim-label")
+        heading_row.append(self.preview_status)
+        section.append(heading_row)
+
+        overlay = Gtk.Overlay()
+        overlay.set_overflow(Gtk.Overflow.HIDDEN)
+        overlay.add_css_class("view")
+
+        self.preview_picture = Gtk.Picture()
+        self.preview_picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        self.preview_picture.set_can_shrink(True)
+        self.preview_picture.set_hexpand(True)
+        self.preview_picture.set_vexpand(True)
+        overlay.set_child(self.preview_picture)
+
+        self.preview_message = Gtk.Label(label="Starting preview...")
+        self.preview_message.add_css_class("dim-label")
+        self.preview_message.set_halign(Gtk.Align.CENTER)
+        self.preview_message.set_valign(Gtk.Align.CENTER)
+        overlay.add_overlay(self.preview_message)
+
+        aspect_frame = Gtk.AspectFrame.new(0.5, 0.5, 16 / 9, False)
+        aspect_frame.set_child(overlay)
+        aspect_frame.set_size_request(-1, 280)
+        section.append(aspect_frame)
 
         row = Gtk.Box(spacing=12)
         row.set_hexpand(True)
@@ -280,8 +316,7 @@ class C200Window(Adw.ApplicationWindow):
         self.mode_dropdown.connect("notify::selected", self.preview_mode_changed)
         row.append(self.mode_dropdown)
 
-        self.preview_button = Gtk.Button(label="Open preview")
-        self.preview_button.add_css_class("suggested-action")
+        self.preview_button = Gtk.Button(label="Pause preview")
         self.preview_button.connect("clicked", self.toggle_preview)
         row.append(self.preview_button)
         section.append(row)
@@ -367,6 +402,10 @@ class C200Window(Adw.ApplicationWindow):
         if control.default is not None and control.minimum <= control.default <= control.maximum:
             scale.add_mark(control.default, Gtk.PositionType.BOTTOM, None)
         scale.connect("value-changed", self.slider_changed, name, value_label, step)
+        scroll_controller = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.BOTH_AXES)
+        scroll_controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        scroll_controller.connect("scroll", self.scroll_over_scale)
+        scale.add_controller(scroll_controller)
         row.append(scale)
         self.control_widgets[name] = scale
         return row
@@ -449,6 +488,23 @@ class C200Window(Adw.ApplicationWindow):
 
     def preview_mode_changed(self, _dropdown: Gtk.DropDown, _property: Any) -> None:
         self.save_settings()
+        if self.preview_pipeline is not None:
+            self.stop_preview()
+            GLib.idle_add(self.start_preview)
+
+    def scroll_over_scale(
+        self,
+        _controller: Gtk.EventControllerScroll,
+        delta_x: float,
+        delta_y: float,
+    ) -> bool:
+        adjustment = self.scroller.get_vadjustment()
+        delta = delta_y if delta_y else delta_x
+        step = max(36, adjustment.get_page_size() / 8)
+        next_value = adjustment.get_value() + delta * step
+        maximum = max(adjustment.get_lower(), adjustment.get_upper() - adjustment.get_page_size())
+        adjustment.set_value(min(maximum, max(adjustment.get_lower(), next_value)))
+        return True
 
     def selected_mode(self) -> StreamMode | None:
         selected = self.mode_dropdown.get_selected()
@@ -462,69 +518,150 @@ class C200Window(Adw.ApplicationWindow):
             self.show_toast(f"Could not save settings: {error}")
 
     def toggle_preview(self, _button: Gtk.Button) -> None:
-        if self.preview_process is not None and self.preview_process.poll() is None:
+        if self.preview_pipeline is not None:
             self.stop_preview()
             return
         self.start_preview()
 
-    def start_preview(self) -> None:
+    def start_preview(self) -> bool:
         if self.camera is None:
             self.show_toast("Connect the C200 first")
-            return
+            return GLib.SOURCE_REMOVE
         mode = self.selected_mode()
         if mode is None:
             self.show_toast("No supported preview mode found")
-            return
+            return GLib.SOURCE_REMOVE
 
-        capture_options = (
-            f"input_format={mode.ffmpeg_format},"
-            f"video_size={mode.width}x{mode.height},framerate={mode.fps:g}"
+        fps = Fraction(str(mode.fps)).limit_denominator(1001)
+        scale = min(1, 1280 / mode.width, 720 / mode.height)
+        output_width = max(2, round(mode.width * scale / 2) * 2)
+        output_height = max(2, round(mode.height * scale / 2) * 2)
+        pipeline_description = (
+            f"v4l2src device={self.camera.device.path} do-timestamp=true ! "
+            f"image/jpeg,width={mode.width},height={mode.height},"
+            f"framerate={fps.numerator}/{fps.denominator} ! "
+            "queue max-size-buffers=1 leaky=downstream ! "
+            "jpegdec ! videoconvert ! videoscale ! "
+            f"video/x-raw,format=RGB,width={output_width},height={output_height} ! "
+            "appsink name=preview_sink emit-signals=true max-buffers=1 drop=true sync=false"
         )
-        command = [
-            "mpv",
-            f"av://v4l2:{self.camera.device.path}",
-            "--no-config",
-            "--profile=low-latency",
-            "--untimed",
-            "--no-cache",
-            "--no-audio",
-            f"--demuxer-lavf-o={capture_options}",
-            "--title=C200 Preview",
-            "--wayland-app-id=com.akshar.C200Control.Preview",
-        ]
         try:
-            self.preview_process = subprocess.Popen(
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError as error:
+            pipeline = Gst.parse_launch(pipeline_description)
+        except GLib.Error as error:
             self.show_toast(f"Could not open preview: {error}")
-            return
+            self.preview_message.set_label("Preview unavailable")
+            self.preview_message.set_visible(True)
+            self.preview_status.set_label("Unavailable")
+            self.preview_button.set_label("Retry preview")
+            return GLib.SOURCE_REMOVE
 
-        self.preview_button.set_label("Close preview")
-        self.preview_button.remove_css_class("suggested-action")
-        self.preview_poll_source = GLib.timeout_add(500, self.poll_preview)
+        sink = pipeline.get_by_name("preview_sink")
+        if sink is None:
+            self.show_toast("Could not create preview output")
+            return GLib.SOURCE_REMOVE
 
-    def poll_preview(self) -> bool:
-        if self.preview_process is not None and self.preview_process.poll() is None:
-            return GLib.SOURCE_CONTINUE
-        self.preview_process = None
-        self.preview_poll_source = None
-        self.preview_button.set_label("Open preview")
-        self.preview_button.add_css_class("suggested-action")
+        self.preview_generation += 1
+        sink.connect("new-sample", self.new_preview_sample, self.preview_generation)
+        self.preview_pipeline = pipeline
+        self.preview_bus = pipeline.get_bus()
+        self.preview_bus.add_signal_watch()
+        self.preview_bus.connect("message", self.preview_message_received, pipeline)
+
+        self.preview_message.set_label("Starting preview...")
+        self.preview_message.set_visible(True)
+        self.preview_status.set_label("Starting")
+        self.preview_button.set_label("Pause preview")
+        if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            self.preview_failed("The camera could not start")
         return GLib.SOURCE_REMOVE
 
+    def new_preview_sample(
+        self,
+        sink: Gst.Element,
+        generation: int,
+    ) -> Gst.FlowReturn:
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.ERROR
+
+        caps = sample.get_caps()
+        structure = caps.get_structure(0)
+        width = structure.get_value("width")
+        height = structure.get_value("height")
+        buffer = sample.get_buffer()
+        success, mapping = buffer.map(Gst.MapFlags.READ)
+        if not success:
+            return Gst.FlowReturn.ERROR
+        try:
+            data = bytes(mapping.data)
+        finally:
+            buffer.unmap(mapping)
+
+        self.pending_frame = (generation, data, width, height)
+        if not self.frame_update_scheduled:
+            self.frame_update_scheduled = True
+            GLib.idle_add(self.display_pending_frame)
+        return Gst.FlowReturn.OK
+
+    def display_pending_frame(self) -> bool:
+        frame = self.pending_frame
+        self.pending_frame = None
+        self.frame_update_scheduled = False
+        if frame is None:
+            return GLib.SOURCE_REMOVE
+
+        generation, data, width, height = frame
+        if generation != self.preview_generation:
+            return GLib.SOURCE_REMOVE
+
+        texture = Gdk.MemoryTexture.new(
+            width,
+            height,
+            Gdk.MemoryFormat.R8G8B8,
+            GLib.Bytes.new(data),
+            width * 3,
+        )
+        self.preview_picture.set_paintable(texture)
+        self.preview_message.set_visible(False)
+        self.preview_status.set_label("Live")
+        return GLib.SOURCE_REMOVE
+
+    def preview_message_received(
+        self,
+        _bus: Gst.Bus,
+        message: Gst.Message,
+        pipeline: Gst.Element,
+    ) -> None:
+        if pipeline is not self.preview_pipeline:
+            return
+        if message.type == Gst.MessageType.ERROR:
+            error, _debug = message.parse_error()
+            self.preview_failed(error.message)
+
+    def preview_failed(self, message: str) -> None:
+        self.stop_preview()
+        self.preview_message.set_label("Preview unavailable")
+        self.preview_message.set_visible(True)
+        self.preview_status.set_label("Unavailable")
+        self.preview_button.set_label("Retry preview")
+        self.show_toast(message)
+
     def stop_preview(self) -> None:
-        if self.preview_poll_source is not None:
-            GLib.source_remove(self.preview_poll_source)
-            self.preview_poll_source = None
-        if self.preview_process is not None and self.preview_process.poll() is None:
-            self.preview_process.terminate()
-        self.preview_process = None
+        self.preview_generation += 1
+        self.pending_frame = None
+        if self.preview_bus is not None:
+            self.preview_bus.remove_signal_watch()
+            self.preview_bus = None
+        if self.preview_pipeline is not None:
+            self.preview_pipeline.set_state(Gst.State.NULL)
+            self.preview_pipeline = None
         if hasattr(self, "preview_button"):
-            self.preview_button.set_label("Open preview")
-            self.preview_button.add_css_class("suggested-action")
+            self.preview_button.set_label("Resume preview")
+        if hasattr(self, "preview_status"):
+            self.preview_status.set_label("Paused")
+        if hasattr(self, "preview_message"):
+            self.preview_message.set_label("Preview paused")
+            self.preview_message.set_visible(True)
 
     def restore_defaults(self, _button: Gtk.Button) -> None:
         if self.camera is None:

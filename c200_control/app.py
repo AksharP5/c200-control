@@ -111,6 +111,7 @@ class C200Window(Adw.ApplicationWindow):
         self.preview_generation = 0
         self.pending_frame: tuple[int, bytes, int, int] | None = None
         self.frame_update_scheduled = False
+        self.adjusting_controls: set[str] = set()
         self.initializing = False
 
         self.toast_overlay = Adw.ToastOverlay()
@@ -402,6 +403,12 @@ class C200Window(Adw.ApplicationWindow):
         if control.default is not None and control.minimum <= control.default <= control.maximum:
             scale.add_mark(control.default, Gtk.PositionType.BOTTOM, None)
         scale.connect("value-changed", self.slider_changed, name, value_label, step)
+        pointer_gesture = Gtk.GestureClick.new()
+        pointer_gesture.set_button(1)
+        pointer_gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        pointer_gesture.connect("pressed", self.slider_pressed, name)
+        pointer_gesture.connect("released", self.slider_released, name)
+        scale.add_controller(pointer_gesture)
         scroll_controller = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.BOTH_AXES)
         scroll_controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         scroll_controller.connect("scroll", self.scroll_over_scale)
@@ -425,8 +432,37 @@ class C200Window(Adw.ApplicationWindow):
         if self.initializing:
             return
         value = round(scale.get_value() / step) * step
+        expected = self.control_values.get(name)
+        if name not in self.adjusting_controls:
+            if expected is not None and value != expected:
+                self.initializing = True
+                try:
+                    scale.set_value(expected)
+                finally:
+                    self.initializing = False
+            return
         label.set_label(self.format_value(name, value))
         self.queue_control(name, value)
+
+    def slider_pressed(
+        self,
+        _gesture: Gtk.GestureClick,
+        _press_count: int,
+        _x: float,
+        _y: float,
+        name: str,
+    ) -> None:
+        self.adjusting_controls.add(name)
+
+    def slider_released(
+        self,
+        _gesture: Gtk.GestureClick,
+        _press_count: int,
+        _x: float,
+        _y: float,
+        name: str,
+    ) -> None:
+        self.adjusting_controls.discard(name)
 
     def boolean_changed(self, switch: Gtk.Switch, _property: Any, name: str) -> None:
         if self.initializing:

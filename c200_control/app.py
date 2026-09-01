@@ -323,7 +323,10 @@ class C200Window(Adw.ApplicationWindow):
         section.append(row)
 
         note = Gtk.Label(
-            label="This mode controls the preview. Calling apps choose their own resolution and frame rate.",
+            label=(
+                "This mode controls the preview. Calling apps choose their own resolution and frame rate. "
+                "Pause this preview before opening the camera in another app."
+            ),
             xalign=0,
         )
         note.set_wrap(True)

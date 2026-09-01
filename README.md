@@ -13,6 +13,8 @@ Camera adjustments apply while the preview is running. Scrolling over a slider s
 
 Resolution and frame rate belong to each video stream. Browsers and calling apps negotiate their own stream mode when they open the camera, so the app does not pretend it can force those settings globally.
 
+Pause the preview before opening the camera in another app. Hardware image controls remain on the camera after the control panel closes.
+
 Firmware updates and Anker-only controls are outside the V4L2 interface and are not supported.
 
 ## Requirements

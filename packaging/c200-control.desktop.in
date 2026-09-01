@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=C200 Control
+GenericName=Webcam Settings
+Comment=Preview and configure an Anker PowerConf C200
+Exec=@EXEC@
+Icon=camera-web
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=Webcam;Camera;Anker;C200;V4L2;
+StartupNotify=true
+StartupWMClass=com.akshar.C200Control

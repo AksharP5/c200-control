@@ -13,8 +13,9 @@ import gi
 gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gst", "1.0")
+gi.require_version("GstVideo", "1.0")
 gi.require_version("Gtk", "4.0")
-from gi.repository import Adw, Gdk, Gio, GLib, Gst, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gst, GstVideo, Gtk  # noqa: E402
 
 from .camera import (
     Camera,
@@ -29,6 +30,10 @@ from .camera import (
 APP_ID = "com.akshar.C200Control"
 CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "c200-control" / "settings.json"
 Gst.init(None)
+PREVIEW_DIRECTIONS = {
+    False: GstVideo.VideoOrientationMethod.IDENTITY,
+    True: GstVideo.VideoOrientationMethod.HORIZ,
+}
 
 CONTROL_GROUPS = (
     (
@@ -78,12 +83,22 @@ class SettingsStore:
             return {}
         return data if isinstance(data, dict) else {}
 
-    def save(self, controls: dict[str, int], preview_mode: str | None) -> None:
+    def save(
+        self,
+        controls: dict[str, int],
+        preview_mode: str | None,
+        preview_mirrored: bool,
+    ) -> None:
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = CONFIG_PATH.with_suffix(".tmp")
         temporary_path.write_text(
             json.dumps(
-                {"version": 1, "controls": controls, "preview_mode": preview_mode},
+                {
+                    "version": 1,
+                    "controls": controls,
+                    "preview_mode": preview_mode,
+                    "preview_mirrored": preview_mirrored,
+                },
                 indent=2,
                 sort_keys=True,
             )
@@ -108,6 +123,7 @@ class C200Window(Adw.ApplicationWindow):
         self.pending_source: int | None = None
         self.preview_pipeline: Gst.Element | None = None
         self.preview_bus: Gst.Bus | None = None
+        self.preview_mirrored = self.store.load().get("preview_mirrored") is True
         self.preview_generation = 0
         self.pending_frame: tuple[int, bytes, int, int] | None = None
         self.frame_update_scheduled = False
@@ -320,6 +336,12 @@ class C200Window(Adw.ApplicationWindow):
         self.preview_button = Gtk.Button(label="Pause preview")
         self.preview_button.connect("clicked", self.toggle_preview)
         row.append(self.preview_button)
+
+        self.mirror_button = Gtk.ToggleButton(label="Mirror")
+        self.mirror_button.set_tooltip_text("Mirror this preview horizontally")
+        self.mirror_button.set_active(self.preview_mirrored)
+        self.mirror_button.connect("toggled", self.preview_mirror_changed)
+        row.append(self.mirror_button)
         section.append(row)
 
         note = Gtk.Label(
@@ -552,9 +574,21 @@ class C200Window(Adw.ApplicationWindow):
     def save_settings(self) -> None:
         mode = self.selected_mode()
         try:
-            self.store.save(self.control_values, mode.key if mode else None)
+            self.store.save(
+                self.control_values,
+                mode.key if mode else None,
+                self.preview_mirrored,
+            )
         except OSError as error:
             self.show_toast(f"Could not save settings: {error}")
+
+    def preview_mirror_changed(self, button: Gtk.ToggleButton) -> None:
+        self.preview_mirrored = button.get_active()
+        if self.preview_pipeline is not None:
+            flip = self.preview_pipeline.get_by_name("preview_flip")
+            if flip is not None:
+                flip.set_property("video-direction", PREVIEW_DIRECTIONS[self.preview_mirrored])
+        self.save_settings()
 
     def toggle_preview(self, _button: Gtk.Button) -> None:
         if self.preview_pipeline is not None:
@@ -580,7 +614,7 @@ class C200Window(Adw.ApplicationWindow):
             f"image/jpeg,width={mode.width},height={mode.height},"
             f"framerate={fps.numerator}/{fps.denominator} ! "
             "queue max-size-buffers=1 leaky=downstream ! "
-            "jpegdec ! videoconvert ! videoscale ! "
+            "jpegdec ! videoconvert ! videoflip name=preview_flip ! videoscale ! "
             f"video/x-raw,format=RGB,width={output_width},height={output_height} ! "
             "appsink name=preview_sink emit-signals=true max-buffers=1 drop=true sync=false"
         )
@@ -595,9 +629,11 @@ class C200Window(Adw.ApplicationWindow):
             return GLib.SOURCE_REMOVE
 
         sink = pipeline.get_by_name("preview_sink")
-        if sink is None:
+        flip = pipeline.get_by_name("preview_flip")
+        if sink is None or flip is None:
             self.show_toast("Could not create preview output")
             return GLib.SOURCE_REMOVE
+        flip.set_property("video-direction", PREVIEW_DIRECTIONS[self.preview_mirrored])
 
         self.preview_generation += 1
         sink.connect("new-sample", self.new_preview_sample, self.preview_generation)
@@ -719,7 +755,11 @@ class C200Window(Adw.ApplicationWindow):
             self.show_toast(f"Could not restore defaults: {error}")
             return
 
-        self.store.save({}, self.selected_mode().key if self.selected_mode() else None)
+        self.store.save(
+            {},
+            self.selected_mode().key if self.selected_mode() else None,
+            self.preview_mirrored,
+        )
         self.show_toast("Camera defaults restored")
         self.load_camera()
 

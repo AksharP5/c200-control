@@ -7,6 +7,7 @@ A small Linux control panel for the Anker PowerConf C200. It uses the camera's s
 - Field of view through the camera's zoom control
 - Pan, tilt, focus, exposure, white balance, and image tuning
 - An automatic live preview with valid resolution and frame-rate combinations
+- A persistent mirror toggle for the app's preview
 - Last-used camera controls, restored the next time the app opens
 
 Camera adjustments apply while the preview is running. Scrolling over a slider scrolls the page instead of changing the setting.

@@ -43,6 +43,23 @@ class FakeAdjustment:
         return 1200.0
 
 
+class FakeFlip:
+    def __init__(self):
+        self.direction = 0
+
+    def set_property(self, name: str, value: int) -> None:
+        if name == "video-direction":
+            self.direction = value
+
+
+class FakePipeline:
+    def __init__(self, flip: FakeFlip):
+        self.flip = flip
+
+    def get_by_name(self, name: str) -> FakeFlip | None:
+        return self.flip if name == "preview_flip" else None
+
+
 class ControlInteractionTests(unittest.TestCase):
     def test_non_pointer_change_is_reverted(self) -> None:
         state = SimpleNamespace(
@@ -82,6 +99,22 @@ class ControlInteractionTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual(adjustment.value, 100)
+
+    def test_mirror_changes_the_running_preview_and_saves(self) -> None:
+        flip = FakeFlip()
+        saved: list[bool] = []
+        state = SimpleNamespace(
+            preview_pipeline=FakePipeline(flip),
+            preview_mirrored=False,
+            save_settings=lambda: saved.append(state.preview_mirrored),
+        )
+        button = SimpleNamespace(get_active=lambda: True)
+
+        C200Window.preview_mirror_changed(state, button)
+
+        self.assertTrue(state.preview_mirrored)
+        self.assertEqual(flip.direction, 4)
+        self.assertEqual(saved, [True])
 
 
 if __name__ == "__main__":

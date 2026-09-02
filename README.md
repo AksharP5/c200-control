@@ -14,6 +14,8 @@ Camera adjustments apply while the preview is running. Scrolling over a slider s
 
 Resolution and frame rate belong to each video stream. Browsers and calling apps negotiate their own stream mode when they open the camera, so the app does not pretend it can force those settings globally.
 
+The C200 preview supports H.264 at 60 fps up to 1920 x 1080, plus 2560 x 1440 at 30 fps. MJPEG preview modes run at 30 fps.
+
 Pause the preview before opening the camera in another app. Hardware image controls remain on the camera after the control panel closes.
 
 Firmware updates and Anker-only controls are outside the V4L2 interface and are not supported.
@@ -23,7 +25,7 @@ Firmware updates and Anker-only controls are outside the V4L2 interface and are 
 - Python 3 with PyGObject
 - GTK 4 and libadwaita
 - `v4l2-ctl`
-- GStreamer with its V4L2, JPEG, and appsink plugins
+- GStreamer with its V4L2, JPEG, H.264, and appsink plugins
 
 These are already present on a standard Omarchy installation.
 

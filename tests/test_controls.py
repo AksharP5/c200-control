@@ -2,6 +2,7 @@ from types import SimpleNamespace
 import unittest
 
 from c200_control.app import C200Window
+from c200_control.camera import StreamMode
 
 
 class FakeScale:
@@ -61,6 +62,17 @@ class FakePipeline:
 
 
 class ControlInteractionTests(unittest.TestCase):
+    def test_preview_modes_include_h264_and_mjpeg(self) -> None:
+        modes = [
+            StreamMode("MJPG", 1920, 1080, 30),
+            StreamMode("H264", 1920, 1080, 60),
+            StreamMode("YUYV", 640, 480, 30),
+        ]
+
+        selected = C200Window.preferred_modes(None, modes)
+
+        self.assertEqual([mode.pixel_format for mode in selected], ["H264", "MJPG"])
+
     def test_non_pointer_change_is_reverted(self) -> None:
         state = SimpleNamespace(
             initializing=False,

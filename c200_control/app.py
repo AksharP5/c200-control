@@ -34,6 +34,10 @@ PREVIEW_DIRECTIONS = {
     False: GstVideo.VideoOrientationMethod.IDENTITY,
     True: GstVideo.VideoOrientationMethod.HORIZ,
 }
+PREVIEW_FORMATS = {
+    "H264": ("video/x-h264", "h264parse ! avdec_h264"),
+    "MJPG": ("image/jpeg", "jpegdec"),
+}
 
 CONTROL_GROUPS = (
     (
@@ -604,17 +608,22 @@ class C200Window(Adw.ApplicationWindow):
         if mode is None:
             self.show_toast("No supported preview mode found")
             return GLib.SOURCE_REMOVE
+        preview_format = PREVIEW_FORMATS.get(mode.pixel_format)
+        if preview_format is None:
+            self.show_toast("This preview format is not supported")
+            return GLib.SOURCE_REMOVE
 
         fps = Fraction(str(mode.fps)).limit_denominator(1001)
+        media_type, decoder = preview_format
         scale = min(1, 1280 / mode.width, 720 / mode.height)
         output_width = max(2, round(mode.width * scale / 2) * 2)
         output_height = max(2, round(mode.height * scale / 2) * 2)
         pipeline_description = (
             f"v4l2src device={self.camera.device.path} do-timestamp=true ! "
-            f"image/jpeg,width={mode.width},height={mode.height},"
+            f"{media_type},width={mode.width},height={mode.height},"
             f"framerate={fps.numerator}/{fps.denominator} ! "
             "queue max-size-buffers=1 leaky=downstream ! "
-            "jpegdec ! videoconvert ! videoflip name=preview_flip ! videoscale ! "
+            f"{decoder} ! videoconvert ! videoflip name=preview_flip ! videoscale ! "
             f"video/x-raw,format=RGB,width={output_width},height={output_height} ! "
             "appsink name=preview_sink emit-signals=true max-buffers=1 drop=true sync=false"
         )
@@ -764,9 +773,12 @@ class C200Window(Adw.ApplicationWindow):
         self.load_camera()
 
     def preferred_modes(self, modes: list[StreamMode]) -> list[StreamMode]:
-        mjpeg_modes = [mode for mode in modes if mode.pixel_format == "MJPG" and mode.fps <= 30]
-        selected = mjpeg_modes or modes
-        return sorted(selected, key=lambda mode: (mode.width * mode.height, mode.fps), reverse=True)
+        supported = [mode for mode in modes if mode.pixel_format in PREVIEW_FORMATS]
+        return sorted(
+            supported,
+            key=lambda mode: (mode.width * mode.height, mode.fps),
+            reverse=True,
+        )
 
     def show_toast(self, message: str) -> None:
         self.toast_overlay.add_toast(Adw.Toast(title=message, timeout=4))
@@ -804,10 +816,10 @@ def check_camera() -> int:
         print(f"C200 found at {device.path}, but it is unavailable: {error}")
         return 1
 
-    mjpeg_modes = [mode for mode in modes if mode.pixel_format == "MJPG"]
+    preview_modes = [mode for mode in modes if mode.pixel_format in PREVIEW_FORMATS]
     print(f"C200 connected at {device.path}")
     print(f"{len(controls)} controls available")
-    print(f"{len(mjpeg_modes)} MJPEG preview modes available")
+    print(f"{len(preview_modes)} preview modes available, including H.264 at 60 fps")
     return 0
 
 

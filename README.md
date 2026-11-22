@@ -5,7 +5,7 @@ A small Linux control panel for the Anker PowerConf C200. It uses the camera's s
 ## What it controls
 
 - Field of view through the camera's zoom control
-- Pan, tilt, focus, exposure, white balance, and image tuning
+- Pan, tilt, focus, white balance, and image tuning
 - An automatic live preview with valid resolution and frame-rate combinations
 - A persistent mirror toggle for the app's preview
 - Last-used camera controls, applied to every app that uses the camera
@@ -28,11 +28,11 @@ systemctl --user status c200-control-sync
 
 ## Frame rate in low light
 
-In dim light the C200's auto exposure lengthens each frame, dropping from 30 fps to about 13 fps, which looks laggy and choppy. More light on your face fixes it. Without that, turn on manual exposure with a short exposure time and raise brightness and gamma to compensate. The camera returns to auto exposure the next time it starts streaming after you turn manual exposure off.
+In dim light the C200's auto exposure lengthens each frame, dropping from 30 fps to about 13 fps, which looks laggy and grainy. More light on your face fixes both.
 
-In OBS, also turn off Use Buffering in the Video Capture Device properties. With buffering on, OBS holds camera frames back to smooth their timing, which adds visible delay.
+The app leaves exposure on auto and has no manual exposure control. The C200's firmware lists manual as its only exposure mode, so once anything switches it to manual, V4L2 cannot switch it back to auto, and the camera keeps that mode even after you unplug it.
 
-Firmware updates and Anker-only controls are outside the V4L2 interface and are not supported.
+In OBS, turn off Use Buffering in the Video Capture Device properties. With buffering on, OBS holds camera frames back to smooth their timing, which adds visible delay.
 
 ## Requirements
 

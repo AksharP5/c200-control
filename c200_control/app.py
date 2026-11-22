@@ -22,7 +22,7 @@ from .camera import (
     applicable_control_values,
     find_c200,
 )
-from .settings import SettingsStore
+from .settings import CONTROL_GROUPS, SettingsStore
 
 
 APP_ID = "com.akshar.C200Control"
@@ -36,45 +36,6 @@ PREVIEW_FORMATS = {
     "MJPG": ("image/jpeg", "jpegdec"),
 }
 
-CONTROL_GROUPS = (
-    (
-        "Framing",
-        (
-            ("zoom_absolute", "Field of view / zoom", "100 is the widest view"),
-            ("pan_absolute", "Pan", None),
-            ("tilt_absolute", "Tilt", None),
-        ),
-    ),
-    (
-        "Image",
-        (
-            ("brightness", "Brightness", None),
-            ("contrast", "Contrast", None),
-            ("saturation", "Saturation", None),
-            ("sharpness", "Sharpness", None),
-            ("gamma", "Gamma", None),
-            ("hue", "Hue", None),
-        ),
-    ),
-    (
-        "Lighting",
-        (
-            ("white_balance_automatic", "Auto white balance", None),
-            ("white_balance_temperature", "White balance", None),
-            ("auto_exposure", "Manual exposure", None),
-            ("exposure_time_absolute", "Exposure time", None),
-            ("power_line_frequency", "Anti-flicker", None),
-        ),
-    ),
-    (
-        "Focus",
-        (
-            ("focus_automatic_continuous", "Autofocus", None),
-            ("focus_absolute", "Manual focus", None),
-        ),
-    ),
-)
-
 
 class C200Window(Adw.ApplicationWindow):
     def __init__(self, application: Adw.Application):
@@ -86,6 +47,7 @@ class C200Window(Adw.ApplicationWindow):
         self.camera: Camera | None = None
         self.controls: dict[str, CameraControl] = {}
         self.control_values: dict[str, int] = {}
+        self.saved_values: dict[str, int] = {}
         self.control_widgets: dict[str, Gtk.Widget] = {}
         self.stream_modes: list[StreamMode] = []
         self.pending_values: dict[str, int] = {}
@@ -165,9 +127,10 @@ class C200Window(Adw.ApplicationWindow):
     def apply_saved_controls(self) -> None:
         if self.camera is None:
             return
+        self.saved_values = self.store.saved_controls()
         values = {
             name: value
-            for name, value in self.store.saved_controls().items()
+            for name, value in self.saved_values.items()
             if name in self.controls
         }
         if not values:
@@ -337,13 +300,12 @@ class C200Window(Adw.ApplicationWindow):
             label_box.append(note_label)
         header.append(label_box)
 
-        if control.kind == "bool" or name == "auto_exposure":
+        if control.kind == "bool":
             switch = Gtk.Switch()
             switch.set_valign(Gtk.Align.CENTER)
             switch.set_halign(Gtk.Align.END)
             switch.set_hexpand(True)
-            active = control.value == (1 if name == "auto_exposure" else 1)
-            switch.set_active(active)
+            switch.set_active(control.value == 1)
             switch.connect("notify::active", self.boolean_changed, name)
             header.append(switch)
             row.append(header)
@@ -414,8 +376,6 @@ class C200Window(Adw.ApplicationWindow):
             return f"{value / 3600:g} degrees"
         if name == "white_balance_temperature":
             return f"{value} K"
-        if name == "exposure_time_absolute":
-            return f"{value / 10:g} ms"
         return str(value)
 
     def slider_changed(self, scale: Gtk.Scale, name: str, label: Gtk.Label, step: int) -> None:
@@ -460,9 +420,6 @@ class C200Window(Adw.ApplicationWindow):
         value = 1 if switch.get_active() else 0
         self.queue_control(name, value)
         self.refresh_dependencies()
-        if name == "auto_exposure" and value not in dict(self.controls[name].menu):
-            # The C200 only accepts manual mode; it returns to auto when a stream starts.
-            self.show_toast("Auto exposure returns the next time the camera starts")
 
     def menu_changed(
         self,
@@ -499,6 +456,7 @@ class C200Window(Adw.ApplicationWindow):
             self.show_toast(f"Could not apply setting: {error}")
             return GLib.SOURCE_REMOVE
 
+        self.saved_values |= values
         self.save_settings()
         return GLib.SOURCE_REMOVE
 
@@ -506,7 +464,6 @@ class C200Window(Adw.ApplicationWindow):
         dependencies = (
             ("white_balance_temperature", "white_balance_automatic", False),
             ("focus_absolute", "focus_automatic_continuous", False),
-            ("exposure_time_absolute", "auto_exposure", True),
         )
         for child_name, parent_name, active_when_parent_on in dependencies:
             child = self.control_widgets.get(child_name)
@@ -543,7 +500,7 @@ class C200Window(Adw.ApplicationWindow):
         mode = self.selected_mode()
         try:
             self.store.save(
-                self.control_values,
+                self.saved_values,
                 mode.key if mode else None,
                 self.preview_mirrored,
             )

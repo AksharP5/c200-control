@@ -26,6 +26,12 @@ The C200 resets its picture, zoom included, whenever an app starts video, while 
 systemctl --user status c200-control-sync
 ```
 
+## Frame rate in low light
+
+In dim light the C200's auto exposure lengthens each frame, dropping from 30 fps to about 13 fps, which looks laggy and choppy. More light on your face fixes it. Without that, turn on manual exposure with a short exposure time and raise brightness and gamma to compensate. The camera returns to auto exposure the next time it starts streaming after you turn manual exposure off.
+
+In OBS, also turn off Use Buffering in the Video Capture Device properties. With buffering on, OBS holds camera frames back to smooth their timing, which adds visible delay.
+
 Firmware updates and Anker-only controls are outside the V4L2 interface and are not supported.
 
 ## Requirements

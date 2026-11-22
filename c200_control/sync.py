@@ -12,11 +12,11 @@ from pathlib import Path
 import sys
 import time
 
-from .camera import Camera, CameraDevice, CameraError, applicable_control_values, find_c200
+from .camera import Camera, CameraControl, CameraDevice, CameraError, applicable_control_values, find_c200
 from .settings import SettingsStore
 
 
-POLL_SECONDS = 0.25
+POLL_SECONDS = 0.05
 RECONNECT_SECONDS = 2
 USB_VIDEO_CLASS = "0e"
 USB_VIDEO_STREAMING = "02"
@@ -37,11 +37,9 @@ def streaming_interface(device: CameraDevice, sysfs: Path = Path("/sys")) -> Pat
     return None
 
 
-def apply_saved_controls(camera: Camera, store: SettingsStore) -> None:
-    controls = camera.controls()
-    current = {name: control.value for name, control in controls.items() if control.value is not None}
+def apply_saved_controls(camera: Camera, controls: dict[str, CameraControl], store: SettingsStore) -> None:
     saved = {name: value for name, value in store.saved_controls().items() if name in controls}
-    camera.set_controls(applicable_control_values(controls, current, saved))
+    camera.set_controls(applicable_control_values(controls, {}, saved))
 
 
 def follow(device: CameraDevice, store: SettingsStore) -> None:
@@ -51,6 +49,13 @@ def follow(device: CameraDevice, store: SettingsStore) -> None:
         return
 
     camera = Camera(device)
+    try:
+        # Listed once per connection: the camera picture resets at stream start,
+        # so every moment spent here shows the wrong framing.
+        controls = camera.controls()
+    except CameraError as error:
+        print(f"Could not read camera controls: {error}", file=sys.stderr)
+        return
     alternate_setting = interface / "bAlternateSetting"
     was_streaming = False
     while True:
@@ -60,7 +65,7 @@ def follow(device: CameraDevice, store: SettingsStore) -> None:
             return
         if streaming and not was_streaming:
             try:
-                apply_saved_controls(camera, store)
+                apply_saved_controls(camera, controls, store)
             except CameraError as error:
                 print(f"Could not apply saved settings: {error}", file=sys.stderr)
         was_streaming = streaming

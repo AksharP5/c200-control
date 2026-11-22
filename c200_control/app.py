@@ -460,6 +460,9 @@ class C200Window(Adw.ApplicationWindow):
         value = 1 if switch.get_active() else 0
         self.queue_control(name, value)
         self.refresh_dependencies()
+        if name == "auto_exposure" and value not in dict(self.controls[name].menu):
+            # The C200 only accepts manual mode; it returns to auto when a stream starts.
+            self.show_toast("Auto exposure returns the next time the camera starts")
 
     def menu_changed(
         self,

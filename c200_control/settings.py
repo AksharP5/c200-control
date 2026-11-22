@@ -6,6 +6,47 @@ from pathlib import Path
 from typing import Any
 
 
+# The controls the app shows and remembers. Exposure is left out on purpose: the C200's
+# firmware lists manual as its only exposure mode, so once switched to manual, V4L2
+# cannot switch it back to auto, and the camera keeps that mode across replugging.
+CONTROL_GROUPS = (
+    (
+        "Framing",
+        (
+            ("zoom_absolute", "Field of view / zoom", "100 is the widest view"),
+            ("pan_absolute", "Pan", None),
+            ("tilt_absolute", "Tilt", None),
+        ),
+    ),
+    (
+        "Image",
+        (
+            ("brightness", "Brightness", None),
+            ("contrast", "Contrast", None),
+            ("saturation", "Saturation", None),
+            ("sharpness", "Sharpness", None),
+            ("gamma", "Gamma", None),
+            ("hue", "Hue", None),
+        ),
+    ),
+    (
+        "Lighting",
+        (
+            ("white_balance_automatic", "Auto white balance", None),
+            ("white_balance_temperature", "White balance", None),
+            ("power_line_frequency", "Anti-flicker", None),
+        ),
+    ),
+    (
+        "Focus",
+        (
+            ("focus_automatic_continuous", "Autofocus", None),
+            ("focus_absolute", "Manual focus", None),
+        ),
+    ),
+)
+SAVED_CONTROLS = frozenset(name for _title, rows in CONTROL_GROUPS for name, _label, _note in rows)
+
 CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "c200-control" / "settings.json"
 
 
@@ -21,7 +62,11 @@ class SettingsStore:
         saved = self.load().get("controls", {})
         if not isinstance(saved, dict):
             return {}
-        return {name: value for name, value in saved.items() if isinstance(value, int)}
+        return {
+            name: value
+            for name, value in saved.items()
+            if name in SAVED_CONTROLS and isinstance(value, int)
+        }
 
     def save(
         self,

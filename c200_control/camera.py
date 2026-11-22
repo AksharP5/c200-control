@@ -160,11 +160,23 @@ def applicable_control_values(
         "focus_automatic_continuous",
         "auto_exposure",
     )
-    ordered = {name: values[name] for name in automatic_controls if name in values}
+
+    def accepts(name: str, value: int) -> bool:
+        control = controls.get(name)
+        if control is None or "read-only" in control.flags:
+            return False
+        # A single rejected value fails the whole batch, and the C200 reports
+        # auto_exposure=0 while its menu only accepts 1.
+        return not control.menu or value in dict(control.menu)
+
+    ordered = {
+        name: values[name]
+        for name in automatic_controls
+        if name in values and accepts(name, values[name])
+    }
 
     for name, value in values.items():
-        control = controls.get(name)
-        if name in ordered or control is None or "read-only" in control.flags:
+        if name in automatic_controls or not accepts(name, value):
             continue
         if name == "white_balance_temperature" and state.get("white_balance_automatic") != 0:
             continue

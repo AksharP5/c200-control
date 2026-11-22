@@ -82,8 +82,19 @@ class CameraParsingTests(unittest.TestCase):
             {"auto_exposure": 1, "exposure_time_absolute": 200},
         )
 
-        self.assertEqual(automatic, {"auto_exposure": 0})
+        self.assertEqual(automatic, {})
         self.assertEqual(manual, {"auto_exposure": 1, "exposure_time_absolute": 200})
+
+    def test_skips_menu_values_the_camera_does_not_offer(self) -> None:
+        controls = parse_controls(CONTROLS)
+
+        values = applicable_control_values(
+            controls,
+            {},
+            {"auto_exposure": 0, "zoom_absolute": 400, "brightness": 55},
+        )
+
+        self.assertEqual(values, {"zoom_absolute": 400, "brightness": 55})
 
 
 if __name__ == "__main__":

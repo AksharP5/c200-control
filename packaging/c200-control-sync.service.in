@@ -1,0 +1,10 @@
+[Unit]
+Description=Apply C200 Control settings whenever an app uses the camera
+
+[Service]
+WorkingDirectory=@PROJECT@
+ExecStart=/usr/bin/python3 -m c200_control.sync
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

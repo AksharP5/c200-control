@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import argparse
 from fractions import Fraction
-import json
-import os
-from pathlib import Path
 import sys
 from typing import Any
 
@@ -25,10 +22,10 @@ from .camera import (
     applicable_control_values,
     find_c200,
 )
+from .settings import SettingsStore
 
 
 APP_ID = "com.akshar.C200Control"
-CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "c200-control" / "settings.json"
 Gst.init(None)
 PREVIEW_DIRECTIONS = {
     False: GstVideo.VideoOrientationMethod.IDENTITY,
@@ -77,38 +74,6 @@ CONTROL_GROUPS = (
         ),
     ),
 )
-
-
-class SettingsStore:
-    def load(self) -> dict[str, Any]:
-        try:
-            data = json.loads(CONFIG_PATH.read_text())
-        except (OSError, json.JSONDecodeError):
-            return {}
-        return data if isinstance(data, dict) else {}
-
-    def save(
-        self,
-        controls: dict[str, int],
-        preview_mode: str | None,
-        preview_mirrored: bool,
-    ) -> None:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = CONFIG_PATH.with_suffix(".tmp")
-        temporary_path.write_text(
-            json.dumps(
-                {
-                    "version": 1,
-                    "controls": controls,
-                    "preview_mode": preview_mode,
-                    "preview_mirrored": preview_mirrored,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
-        )
-        temporary_path.replace(CONFIG_PATH)
 
 
 class C200Window(Adw.ApplicationWindow):
@@ -200,14 +165,10 @@ class C200Window(Adw.ApplicationWindow):
     def apply_saved_controls(self) -> None:
         if self.camera is None:
             return
-        saved = self.store.load().get("controls", {})
-        if not isinstance(saved, dict):
-            return
-
         values = {
             name: value
-            for name, value in saved.items()
-            if name in self.controls and isinstance(value, int)
+            for name, value in self.store.saved_controls().items()
+            if name in self.controls
         }
         if not values:
             return

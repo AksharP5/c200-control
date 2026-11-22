@@ -8,15 +8,23 @@ A small Linux control panel for the Anker PowerConf C200. It uses the camera's s
 - Pan, tilt, focus, exposure, white balance, and image tuning
 - An automatic live preview with valid resolution and frame-rate combinations
 - A persistent mirror toggle for the app's preview
-- Last-used camera controls, restored the next time the app opens
+- Last-used camera controls, applied to every app that uses the camera
 
-Camera adjustments apply while the preview is running. Scrolling over a slider scrolls the page instead of changing the setting.
+Scrolling over a slider scrolls the page instead of changing the setting.
 
 Resolution and frame rate belong to each video stream. Browsers and calling apps negotiate their own stream mode when they open the camera, so the app does not pretend it can force those settings globally.
 
 The C200 preview supports H.264 at 60 fps up to 1920 x 1080, plus 2560 x 1440 at 30 fps. MJPEG preview modes run at 30 fps.
 
-Pause the preview before opening the camera in another app. Hardware image controls remain on the camera after the control panel closes.
+Pause the preview before opening the camera in another app.
+
+## Settings in other apps
+
+The C200 resets its picture, zoom included, whenever an app starts video, while still reporting the old values. The `c200-control-sync` background service watches for that and reapplies your saved settings within about a second, so OBS, browsers and calling apps get the same view as the preview. `./install.sh` installs and starts it.
+
+```bash
+systemctl --user status c200-control-sync
+```
 
 Firmware updates and Anker-only controls are outside the V4L2 interface and are not supported.
 
@@ -47,7 +55,7 @@ Check camera access without opening the interface:
 ./install.sh
 ```
 
-The installer adds `C200 Control` to the standard application launcher. Remove `~/.local/share/applications/c200-control.desktop` to uninstall the launcher entry.
+The installer adds `C200 Control` to the standard application launcher and enables the settings sync service. To uninstall, run `systemctl --user disable --now c200-control-sync` and remove `~/.local/share/applications/c200-control.desktop` and `~/.config/systemd/user/c200-control-sync.service`.
 
 Settings are stored in `~/.config/c200-control/settings.json` and are not part of this repository.
 
